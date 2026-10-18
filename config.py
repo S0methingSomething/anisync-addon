@@ -8,7 +8,9 @@ load_dotenv()
 
 class Config:
     JSON_SORT_KEYS = False
-    FLASK_HOST = os.getenv("FLASK_RUN_HOST", "localhost")
+    FLASK_HOST = (
+        os.getenv("FLASK_RUN_HOST") or os.getenv("RENDER_EXTERNAL_HOSTNAME") or os.getenv("SPACE_HOST") or "localhost"
+    )
     FLASK_PORT = os.getenv("FLASK_RUN_PORT", "5000")
     DEBUG = os.getenv("FLASK_DEBUG", "False").lower() in ["1", "true"]
 
@@ -20,7 +22,9 @@ class Config:
 
     SESSION_TYPE = os.getenv("SESSION_TYPE", "filesystem")
     SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
-    SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "False").lower() in ["1", "true"] or (not DEBUG and os.getenv("PROTOCOL", "https").lower() == "https")
+    SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "False").lower() in ["1", "true"] or (
+        not DEBUG and os.getenv("PROTOCOL", "https").lower() == "https"
+    )
     SEND_FILE_MAX_AGE_DEFAULT = timedelta(days=7)
     PERMANENT_SESSION_LIFETIME = timedelta(days=30)
 
