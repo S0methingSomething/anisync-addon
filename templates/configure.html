@@ -2630,48 +2630,151 @@
                         </div>
                     </div>
 
-                    <!-- Gemini AI Section Replica -->
-                    <div id="gemini-key-section" style="margin-top: 1.5rem;">
-                        <label class="rec-label mb-2">GEMINI AI (OPTIONAL)</label>
+                    <!-- AI Recommendation Enhancer Section -->
+                    <div id="ai-key-section" style="margin-top: 1.5rem;">
+                        <label class="rec-label mb-2">AI RECOMMENDATIONS (OPTIONAL)</label>
                         <p class="text-secondary small mb-3" style="font-size: 0.78rem; line-height: 1.4;">
-                            Used to generate personalized, AI-powered explanations for recommended anime based on
-                            your unique watch history.
+                            Generates personalized, AI-powered explanations for recommended anime based on
+                            your unique watch history, categories, and ratings.
                         </p>
 
-                        <div class="gemini-input-wrapper position-relative">
-                            <input type="password" id="gemini_api_key" name="gemini_api_key" class="gemini-input"
-                                value="{{ user.get('gemini_api_key', '') }}"
-                                placeholder="Gemini API key here" autocomplete="new-password">
-                            <button type="button" class="gemini-btn" id="toggle-gemini-visibility"
-                                style="border-right: 1px solid #2a2a2a; padding-right: 0.75rem; margin-right: 0.75rem;">
-                                <i class="fa-regular fa-eye" id="gemini-eye-icon"></i>
+                        <!-- Provider Selector Tabs -->
+                        {% set current_ai_provider = user.get('ai_provider', 'openrouter' if user.get('openrouter_api_key') else 'gemini' if user.get('gemini_api_key') else 'openrouter') %}
+                        <div class="d-flex gap-2 mb-3">
+                            <input type="hidden" name="ai_provider" id="ai_provider" value="{{ current_ai_provider }}">
+                            <button type="button" class="btn btn-sm ai-provider-btn {% if current_ai_provider == 'openrouter' %}btn-primary active{% else %}btn-outline-secondary{% endif %}" data-provider="openrouter" style="font-size: 0.8rem; border-radius: 6px; padding: 0.35rem 0.85rem;">
+                                <i class="fa-solid fa-bolt me-1.5" style="color: #60a5fa;"></i> OpenRouter
                             </button>
-                            <button type="button" class="gemini-btn p-0" id="validate-gemini-btn"
-                                title="Validate Key">
-                                <i id="gemini-check-icon"
-                                    class="fa-solid {% if user.get('gemini_api_key') %}{% if user.get('gemini_key_valid') == False %}fa-circle-xmark text-danger{% else %}fa-circle-check text-success{% endif %}{% else %}fa-circle-check text-secondary{% endif %}"
-                                    style="font-size: 1.1rem; transition: color 0.2s;"></i>
+                            <button type="button" class="btn btn-sm ai-provider-btn {% if current_ai_provider == 'gemini' %}btn-primary active{% else %}btn-outline-secondary{% endif %}" data-provider="gemini" style="font-size: 0.8rem; border-radius: 6px; padding: 0.35rem 0.85rem;">
+                                <i class="fa-brands fa-google me-1.5" style="color: #38bdf8;"></i> Google Gemini
+                            </button>
+                            <button type="button" class="btn btn-sm ai-provider-btn {% if current_ai_provider == 'none' %}btn-primary active{% else %}btn-outline-secondary{% endif %}" data-provider="none" style="font-size: 0.8rem; border-radius: 6px; padding: 0.35rem 0.85rem;">
+                                <i class="fa-solid fa-ban me-1.5"></i> Disabled
                             </button>
                         </div>
 
-                        <div class="d-flex justify-content-between align-items-center mt-2.5">
-                            <span id="gemini-validation-status"
-                                class="small ms-3 {% if user.get('gemini_api_key') %}{% if user.get('gemini_key_valid') == False %}text-danger{% else %}text-success fw-medium{% endif %}{% else %}text-secondary{% endif %}">
-                                {% if user.get('gemini_api_key') %}
-                                {% if user.get('gemini_key_valid') == False %}
-                                Invalid Gemini API key
-                                {% else %}
-                                API key verified
-                                {% endif %}
-                                {% else %}
-                                Not verified
-                                {% endif %}
+                        <!-- OpenRouter Panel -->
+                        <div id="openrouter-panel" style="display: {% if current_ai_provider == 'openrouter' %}block{% else %}none{% endif %};">
+                            <label class="small text-secondary fw-semibold mb-1" style="font-size: 0.75rem;">OPENROUTER API KEY</label>
+                            <div class="gemini-input-wrapper position-relative mb-2">
+                                <input type="password" id="openrouter_api_key" name="openrouter_api_key" class="gemini-input"
+                                    value="{{ user.get('openrouter_api_key', '') }}"
+                                    placeholder="sk-or-v1-..." autocomplete="new-password">
+                                <button type="button" class="gemini-btn" id="toggle-openrouter-visibility"
+                                    style="border-right: 1px solid #2a2a2a; padding-right: 0.75rem; margin-right: 0.75rem;">
+                                    <i class="fa-regular fa-eye" id="openrouter-eye-icon"></i>
+                                </button>
+                                <button type="button" class="gemini-btn p-0" id="validate-openrouter-btn"
+                                    title="Validate Key">
+                                    <i id="openrouter-check-icon"
+                                        class="fa-solid {% if user.get('openrouter_api_key') %}{% if user.get('openrouter_key_valid') == False %}fa-circle-xmark text-danger{% else %}fa-circle-check text-success{% endif %}{% else %}fa-circle-check text-secondary{% endif %}"
+                                        style="font-size: 1.1rem; transition: color 0.2s;"></i>
+                                </button>
+                            </div>
+
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <span id="openrouter-validation-status"
+                                    class="small ms-3 {% if user.get('openrouter_api_key') %}{% if user.get('openrouter_key_valid') == False %}text-danger{% else %}text-success fw-medium{% endif %}{% else %}text-secondary{% endif %}">
+                                    {% if user.get('openrouter_api_key') %}
+                                    {% if user.get('openrouter_key_valid') == False %}
+                                    Invalid OpenRouter API key
+                                    {% else %}
+                                    API key verified
+                                    {% endif %}
+                                    {% else %}
+                                    Not verified
+                                    {% endif %}
+                                </span>
+                                <a href="https://openrouter.ai/settings/keys" target="_blank"
+                                    class="small text-info text-decoration-none me-3" style="font-size:0.78rem;">
+                                    Get OpenRouter Key <i class="fa-solid fa-arrow-up-right-from-square ms-1"
+                                        style="font-size: 0.65rem;"></i>
+                                </a>
+                            </div>
+
+                            <!-- Model Selection & Search -->
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <label class="small text-secondary fw-semibold" style="font-size: 0.75rem;">MODEL SELECTION</label>
+                                <div class="form-check form-switch mb-0" style="font-size: 0.75rem;">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="openrouter-free-only">
+                                    <label class="form-check-label text-info ms-1" for="openrouter-free-only" style="cursor: pointer;">
+                                        Free Models Only
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="gemini-input-wrapper position-relative mb-2">
+                                <input type="text" id="openrouter_model" name="openrouter_model" class="gemini-input"
+                                    list="openrouter-models-datalist"
+                                    value="{{ user.get('openrouter_model', 'google/gemini-2.5-flash') }}"
+                                    placeholder="Type or select model (e.g. google/gemini-2.5-flash)">
+                                <button type="button" class="gemini-btn" id="fetch-openrouter-models-btn" title="Refresh available models">
+                                    <i class="fa-solid fa-arrows-rotate" id="openrouter-refresh-icon"></i>
+                                </button>
+                            </div>
+                            <datalist id="openrouter-models-datalist">
+                                <option value="google/gemini-2.5-flash">Fast & High Quality</option>
+                                <option value="deepseek/deepseek-chat:free">DeepSeek V3 (Free)</option>
+                                <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (Free)</option>
+                                <option value="google/gemini-2.0-flash-exp:free">Gemini 2.0 Flash (Free)</option>
+                                <option value="deepseek/deepseek-chat">DeepSeek V3</option>
+                                <option value="anthropic/claude-3.5-haiku">Claude 3.5 Haiku</option>
+                                <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+                            </datalist>
+                            <span class="small text-muted d-block ms-1 mb-3" style="font-size: 0.72rem;">
+                                Choose from presets or enter any model slug from <a href="https://openrouter.ai/models" target="_blank" class="text-info text-decoration-none">openrouter.ai/models</a>.
                             </span>
-                            <a href="https://aistudio.google.com/" target="_blank"
-                                class="small text-info text-decoration-none me-3" style="font-size:0.78rem;">
-                                Get Gemini API Key <i class="fa-solid fa-arrow-up-right-from-square ms-1"
-                                    style="font-size: 0.65rem;"></i>
-                            </a>
+                        </div>
+
+                        <!-- Gemini Panel -->
+                        <div id="gemini-panel" style="display: {% if current_ai_provider == 'gemini' %}block{% else %}none{% endif %};">
+                            <label class="small text-secondary fw-semibold mb-1" style="font-size: 0.75rem;">GEMINI API KEY</label>
+                            <div class="gemini-input-wrapper position-relative mb-2">
+                                <input type="password" id="gemini_api_key" name="gemini_api_key" class="gemini-input"
+                                    value="{{ user.get('gemini_api_key', '') }}"
+                                    placeholder="Gemini API key here" autocomplete="new-password">
+                                <button type="button" class="gemini-btn" id="toggle-gemini-visibility"
+                                    style="border-right: 1px solid #2a2a2a; padding-right: 0.75rem; margin-right: 0.75rem;">
+                                    <i class="fa-regular fa-eye" id="gemini-eye-icon"></i>
+                                </button>
+                                <button type="button" class="gemini-btn p-0" id="validate-gemini-btn"
+                                    title="Validate Key">
+                                    <i id="gemini-check-icon"
+                                        class="fa-solid {% if user.get('gemini_api_key') %}{% if user.get('gemini_key_valid') == False %}fa-circle-xmark text-danger{% else %}fa-circle-check text-success{% endif %}{% else %}fa-circle-check text-secondary{% endif %}"
+                                        style="font-size: 1.1rem; transition: color 0.2s;"></i>
+                                </button>
+                            </div>
+
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <span id="gemini-validation-status"
+                                    class="small ms-3 {% if user.get('gemini_api_key') %}{% if user.get('gemini_key_valid') == False %}text-danger{% else %}text-success fw-medium{% endif %}{% else %}text-secondary{% endif %}">
+                                    {% if user.get('gemini_api_key') %}
+                                    {% if user.get('gemini_key_valid') == False %}
+                                    Invalid Gemini API key
+                                    {% else %}
+                                    API key verified
+                                    {% endif %}
+                                    {% else %}
+                                    Not verified
+                                    {% endif %}
+                                </span>
+                                <a href="https://aistudio.google.com/" target="_blank"
+                                    class="small text-info text-decoration-none me-3" style="font-size:0.78rem;">
+                                    Get Gemini API Key <i class="fa-solid fa-arrow-up-right-from-square ms-1"
+                                        style="font-size: 0.65rem;"></i>
+                                </a>
+                            </div>
+                        </div>
+
+                        <!-- Cross-Provider Fallback Checkbox -->
+                        <div id="ai-fallback-section" class="form-check form-switch mt-2 mb-1" style="display: {% if current_ai_provider != 'none' %}block{% else %}none{% endif %};">
+                            <input class="form-check-input" type="checkbox" role="switch" id="ai_enable_fallback" name="ai_enable_fallback"
+                                {% if user.get('ai_enable_fallback', True) %}checked{% endif %}>
+                            <label class="form-check-label ms-1" for="ai_enable_fallback">
+                                <span class="fw-medium d-block small" style="font-size: 0.8rem;">Automatic Cross-Provider Fallback</span>
+                                <span class="text-secondary small d-block" style="font-size: 0.72rem;">
+                                    If your primary provider fails or runs out of credits, automatically try the secondary provider (if configured).
+                                </span>
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -4081,6 +4184,29 @@
                                     topCheckIcon.className = "fa-solid fa-circle-check text-secondary";
                                     topStatusSpan.className = "small text-secondary";
                                     topStatusSpan.textContent = "Not verified";
+                                }
+                            }
+
+                            // Update OpenRouter status dynamically
+                            const openrouterKeyEl = document.getElementById("openrouter_api_key");
+                            const openrouterKeyVal = openrouterKeyEl ? openrouterKeyEl.value.trim() : "";
+                            const openrouterCheckIcon = document.getElementById("openrouter-check-icon");
+                            const openrouterStatusSpan = document.getElementById("openrouter-validation-status");
+                            if (openrouterCheckIcon && openrouterStatusSpan) {
+                                if (openrouterKeyVal) {
+                                    if (result.openrouter_valid) {
+                                        openrouterCheckIcon.className = "fa-solid fa-circle-check text-success";
+                                        openrouterStatusSpan.className = "small text-success fw-medium ms-3";
+                                        openrouterStatusSpan.textContent = "API key verified";
+                                    } else {
+                                        openrouterCheckIcon.className = "fa-solid fa-circle-xmark text-danger";
+                                        openrouterStatusSpan.className = "small text-danger ms-3";
+                                        openrouterStatusSpan.textContent = "Invalid OpenRouter API key";
+                                    }
+                                } else {
+                                    openrouterCheckIcon.className = "fa-solid fa-circle-check text-secondary";
+                                    openrouterStatusSpan.className = "small text-secondary ms-3";
+                                    openrouterStatusSpan.textContent = "Not verified";
                                 }
                             }
 
@@ -5844,6 +5970,137 @@
             enableRecsCheckbox.addEventListener("change", () => syncCatalogManagement(false));
         }
 
+        // AI Provider Switching Logic
+        const providerBtns = document.querySelectorAll(".ai-provider-btn");
+        const providerInput = document.getElementById("ai_provider");
+        const openrouterPanel = document.getElementById("openrouter-panel");
+        const geminiPanel = document.getElementById("gemini-panel");
+        const fallbackSection = document.getElementById("ai-fallback-section");
+
+        providerBtns.forEach(btn => {
+            btn.addEventListener("click", function () {
+                const provider = this.getAttribute("data-provider");
+                if (providerInput) providerInput.value = provider;
+                providerBtns.forEach(b => {
+                    b.classList.remove("btn-primary", "active");
+                    b.classList.add("btn-outline-secondary");
+                });
+                this.classList.remove("btn-outline-secondary");
+                this.classList.add("btn-primary", "active");
+
+                if (openrouterPanel) openrouterPanel.style.display = provider === "openrouter" ? "block" : "none";
+                if (geminiPanel) geminiPanel.style.display = provider === "gemini" ? "block" : "none";
+                if (fallbackSection) fallbackSection.style.display = provider !== "none" ? "block" : "none";
+            });
+        });
+
+        // OpenRouter UI Logic
+        const orKeyInput = document.getElementById("openrouter_api_key");
+        const orToggleBtn = document.getElementById("toggle-openrouter-visibility");
+        if (orToggleBtn && orKeyInput) {
+            orToggleBtn.addEventListener("click", function () {
+                if (orKeyInput.type === "password") {
+                    orKeyInput.type = "text";
+                    orToggleBtn.innerHTML = '<i class="fa-regular fa-eye-slash"></i>';
+                } else {
+                    orKeyInput.type = "password";
+                    orToggleBtn.innerHTML = '<i class="fa-regular fa-eye"></i>';
+                }
+            });
+        }
+
+        const orValidateBtn = document.getElementById("validate-openrouter-btn");
+        const orCheckIcon = document.getElementById("openrouter-check-icon");
+        const orStatusSpan = document.getElementById("openrouter-validation-status");
+        if (orValidateBtn && orCheckIcon && orStatusSpan && orKeyInput) {
+            orValidateBtn.addEventListener("click", async function () {
+                const apiKey = orKeyInput.value.trim();
+                if (!apiKey) {
+                    orStatusSpan.textContent = "Key cannot be empty";
+                    orStatusSpan.className = "small text-danger ms-3";
+                    orCheckIcon.className = "fa-solid fa-circle-xmark text-danger";
+                    return;
+                }
+                orStatusSpan.textContent = "Verifying...";
+                orStatusSpan.className = "small text-info ms-3";
+                orCheckIcon.className = "fa-solid fa-circle-notch fa-spin text-info";
+                orValidateBtn.disabled = true;
+                try {
+                    const response = await fetch("/openrouter/validation", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ api_key: apiKey })
+                    });
+                    const result = await response.json();
+                    if (response.ok && result.status === "success") {
+                        orStatusSpan.textContent = result.message || "API key verified";
+                        orStatusSpan.className = "small text-success fw-semibold ms-3";
+                        orCheckIcon.className = "fa-solid fa-circle-check text-success";
+                    } else {
+                        orStatusSpan.textContent = result.message || "Invalid OpenRouter API key";
+                        orStatusSpan.className = "small text-danger ms-3";
+                        orCheckIcon.className = "fa-solid fa-circle-xmark text-danger";
+                    }
+                } catch (err) {
+                    orStatusSpan.textContent = "Verification failed";
+                    orStatusSpan.className = "small text-danger ms-3";
+                    orCheckIcon.className = "fa-solid fa-circle-xmark text-danger";
+                } finally {
+                    orValidateBtn.disabled = false;
+                }
+            });
+        }
+
+        if (orKeyInput && orCheckIcon && orStatusSpan) {
+            orKeyInput.addEventListener("input", function () {
+                orCheckIcon.className = "fa-solid fa-circle-check text-secondary";
+                orStatusSpan.textContent = "Not verified";
+                orStatusSpan.className = "small text-secondary ms-3";
+            });
+        }
+
+        // OpenRouter Models Fetch & Free Filter
+        const orDatalist = document.getElementById("openrouter-models-datalist");
+        const orRefreshBtn = document.getElementById("fetch-openrouter-models-btn");
+        const orRefreshIcon = document.getElementById("openrouter-refresh-icon");
+        const orFreeOnlyCheckbox = document.getElementById("openrouter-free-only");
+
+        async function fetchOpenRouterModels(freeOnly = false) {
+            if (!orDatalist) return;
+            if (orRefreshIcon) orRefreshIcon.classList.add("fa-spin");
+            try {
+                const res = await fetch(`/api/models/openrouter?free_only=${freeOnly ? "true" : "false"}`);
+                const data = await res.json();
+                if (res.ok && data.status === "success" && Array.isArray(data.models) && data.models.length > 0) {
+                    orDatalist.innerHTML = "";
+                    data.models.forEach(m => {
+                        const opt = document.createElement("option");
+                        opt.value = m.id;
+                        const label = m.is_free ? `${m.name} (Free)` : m.name;
+                        opt.textContent = label;
+                        orDatalist.appendChild(opt);
+                    });
+                }
+            } catch (err) {
+                console.warn("Failed to dynamically fetch OpenRouter models:", err);
+            } finally {
+                if (orRefreshIcon) orRefreshIcon.classList.remove("fa-spin");
+            }
+        }
+
+        if (orRefreshBtn) {
+            orRefreshBtn.addEventListener("click", () => {
+                const isFreeOnly = orFreeOnlyCheckbox ? orFreeOnlyCheckbox.checked : false;
+                fetchOpenRouterModels(isFreeOnly);
+            });
+        }
+        if (orFreeOnlyCheckbox) {
+            orFreeOnlyCheckbox.addEventListener("change", function () {
+                fetchOpenRouterModels(this.checked);
+            });
+        }
+
+        // Gemini UI Logic
         const keyInput = document.getElementById("gemini_api_key");
         const toggleBtn = document.getElementById("toggle-gemini-visibility");
         if (toggleBtn && keyInput) {
