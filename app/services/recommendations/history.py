@@ -25,7 +25,9 @@ async def fetch_user_watchlist_history(user: dict, user_id: str) -> tuple[dict, 
             seen_mal_ids = set()
             while offset < MAL_FETCH_CAP:
                 try:
-                    res = await mal_api.get_user_anime_list(user["mal_access_token"], limit=MAL_PAGE_SIZE, offset=offset)
+                    res = await mal_api.get_user_anime_list(
+                        user["mal_access_token"], limit=MAL_PAGE_SIZE, offset=offset
+                    )
                 except Exception as page_err:
                     logger.warning("MAL page fetch failed at offset %d for user %s: %s", offset, user_id, page_err)
                     break
@@ -69,7 +71,11 @@ async def fetch_user_watchlist_history(user: dict, user_id: str) -> tuple[dict, 
                 store_user(user)
             collection = await anilist_api.get_user_anime_list(user["anilist_token"], user_id=anilist_uid)
             for user_list in collection.get("lists", []):
-                anilist_items.extend(user_list.get("entries", []))
+                lname = user_list.get("name")
+                for entry in user_list.get("entries", []):
+                    if isinstance(entry, dict):
+                        entry["_list_name"] = lname
+                        anilist_items.append(entry)
         except anilist_api.AnilistTokenInvalidError as e:
             logger.warning("AniList token invalid during recommendations update for user %s: %s", user_id, e)
             handle_invalid_anilist_token(user_id)
@@ -161,6 +167,7 @@ async def fetch_user_watchlist_history(user: dict, user_id: str) -> tuple[dict, 
         genres = media.get("genres", []) or []
 
         key = mal_id if mal_id else f"al_{anilist_id}"
+        list_name = entry.get("_list_name") or status
         if key not in merged_shows:
             merged_shows[key] = {
                 "title": title,
@@ -170,12 +177,15 @@ async def fetch_user_watchlist_history(user: dict, user_id: str) -> tuple[dict, 
                 "kitsu_id": None,
                 "simkl_id": None,
                 "status": status,
+                "list_name": list_name,
                 "rating": rating,
                 "genres": genres,
             }
         else:
             merged_shows[key]["anilist_id"] = anilist_id
             merged_shows[key]["rating"] = max(merged_shows[key].get("rating") or 0, rating)
+            if entry.get("_list_name"):
+                merged_shows[key]["list_name"] = entry["_list_name"]
 
             old_titles = set(merged_shows[key].get("all_titles") or [])
             old_titles.update(all_titles)

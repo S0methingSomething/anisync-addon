@@ -2,9 +2,8 @@ import datetime
 import logging
 import random
 
-from app.services.db import get_user
-from app.services.recommendations.ai_enhancer import enhance_recommendations_with_gemini
-from app.services.recommendations.cache import get_popular_fallbacks, recommendations_cache_collection
+from app.services.recommendations.ai_enhancer import enhance_recommendations_with_ai
+from app.services.recommendations.cache import recommendations_cache_collection
 from app.services.recommendations.history import fetch_user_watchlist_history
 from app.services.recommendations.seeding import select_weighted_seeds
 
@@ -140,9 +139,9 @@ async def _update_recommendations_cache_impl(user_id: str, force: bool = False):
         watched_titles,
     )
 
-    # 7. Enhance recommendations using Gemini API if key is provided
-    gemini_api_key = user.get("gemini_api_key", "").strip()
-    if gemini_api_key:
+    # 7. Enhance recommendations using AI (OpenRouter or Gemini with fallback)
+    has_ai_key = bool(user.get("openrouter_api_key") or user.get("gemini_api_key"))
+    if has_ai_key and user.get("ai_provider") != "none":
         candidate_groups = {
             "top_picks": top_picks,
             "item_recs": item_recs,
@@ -151,9 +150,7 @@ async def _update_recommendations_cache_impl(user_id: str, force: bool = False):
             "genre_1_items": genre_1_items,
             "genre_2_items": genre_2_items,
         }
-        enhanced_groups = await enhance_recommendations_with_gemini(
-            gemini_api_key, sorted_user_history, candidate_groups
-        )
+        enhanced_groups = await enhance_recommendations_with_ai(user, sorted_user_history, candidate_groups)
         top_picks = enhanced_groups["top_picks"]
         item_recs = enhanced_groups["item_recs"]
         loved_items = enhanced_groups["loved_items"]

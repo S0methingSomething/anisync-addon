@@ -105,6 +105,8 @@ async def generate_top_picks(
         year_val = int(year or 0)
         episodes_val = int(media.get("episodes") or 0)
 
+        genres_val = media.get("genres") or []
+
         if key not in rec_candidates:
             rec_candidates[key] = {
                 "id": key,
@@ -116,6 +118,7 @@ async def generate_top_picks(
                 "mal_id": mid,
                 "score": score_val,
                 "year": year_val,
+                "genres": genres_val,
                 "episodes": episodes_val,
                 "popularity": pop_score or 0,
                 "rec_votes": rec.get("rating", 1),

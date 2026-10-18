@@ -4,7 +4,11 @@ Provides personalized anime recommendations based on tracker watchlists (MAL, An
 heuristic seed weighting, community suggestions, Gemini AI enhancement, and MongoDB caching.
 """
 
-from app.services.recommendations.ai_enhancer import enhance_recommendations_with_gemini
+from app.services.recommendations.ai_enhancer import (
+    DEFAULT_OPENROUTER_MODEL,
+    enhance_recommendations_with_gemini,
+    enhance_recommendations_with_openrouter,
+)
 from app.services.recommendations.cache import (
     POPULAR_FALLBACKS,
     currently_updating_users,
@@ -40,6 +44,8 @@ __all__ = [
     "get_anilist_recommendations_bulk",
     "get_top_anime_by_genre",
     "enhance_recommendations_with_gemini",
+    "enhance_recommendations_with_openrouter",
+    "DEFAULT_OPENROUTER_MODEL",
     "select_weighted_seeds",
     "get_recommendations_for_seeds",
     "generate_genre_recommendations",
