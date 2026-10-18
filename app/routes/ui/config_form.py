@@ -1,13 +1,16 @@
 import asyncio
 import json
 import logging
+import sys
 from datetime import UTC, datetime
 
-import sys
 from quart import flash, has_request_context, request
 
+from app.routes.catalog.sorting import get_allowed_sorts_for_catalog
 from app.services.db import invalidate_user_watchlist_cache
 from app.services.db import store_user as _db_store_user
+
+from .validation import check_gemini_api_key_valid, check_openrouter_api_key_valid
 
 
 def store_user(user):
@@ -16,8 +19,6 @@ def store_user(user):
         return ui_mod.store_user(user)
     return _db_store_user(user)
 
-from .validation import check_gemini_api_key_valid
-from app.routes.catalog.sorting import get_allowed_sorts_for_catalog
 
 POSSIBLE_CATS = [
     "anisync_search",
@@ -275,10 +276,20 @@ async def handle_configure_form(user: dict, form) -> dict | None:
         user["custom_poster_pattern"] = form.get("custom_poster_pattern", "").strip()
 
     rpdb_task = None
+    openrouter_task = None
     gemini_task = None
     top_poster_task = None
     rpdb_key = user.get("rpdb_api_key", "")
+    openrouter_key = user.get("openrouter_api_key", "")
     gemini_key = user.get("gemini_api_key", "")
+
+    if "ai_provider" in form:
+        user["ai_provider"] = form.get("ai_provider", "").strip().lower()
+    if "openrouter_model" in form:
+        user["openrouter_model"] = form.get("openrouter_model", "").strip() or "google/gemini-2.5-flash"
+    if "ai_enable_fallback" in form:
+        val = form.get("ai_enable_fallback")
+        user["ai_enable_fallback"] = val in (True, "true", "on", "1")
 
     if "rpdb_api_key" in form:
         rpdb_key = form.get("rpdb_api_key", "").strip()
@@ -301,6 +312,14 @@ async def handle_configure_form(user: dict, form) -> dict | None:
         else:
             user["top_key_valid"] = False
 
+    if "openrouter_api_key" in form:
+        openrouter_key = form.get("openrouter_api_key", "").strip()
+        user["openrouter_api_key"] = openrouter_key
+        if openrouter_key:
+            openrouter_task = check_openrouter_api_key_valid(openrouter_key)
+        else:
+            user["openrouter_key_valid"] = False
+
     if "gemini_api_key" in form:
         gemini_key = form.get("gemini_api_key", "").strip()
         user["gemini_api_key"] = gemini_key
@@ -309,12 +328,14 @@ async def handle_configure_form(user: dict, form) -> dict | None:
         else:
             user["gemini_key_valid"] = False
 
-    if rpdb_task or gemini_task or top_poster_task:
+    if rpdb_task or openrouter_task or gemini_task or top_poster_task:
         tasks = []
         if rpdb_task:
             tasks.append(rpdb_task)
         if top_poster_task:
             tasks.append(top_poster_task)
+        if openrouter_task:
+            tasks.append(openrouter_task)
         if gemini_task:
             tasks.append(gemini_task)
 
@@ -330,6 +351,10 @@ async def handle_configure_form(user: dict, form) -> dict | None:
             top_valid = results[idx]
             user["top_key_valid"] = top_valid
             idx += 1
+        if openrouter_task:
+            openrouter_valid = results[idx][0]
+            user["openrouter_key_valid"] = openrouter_valid
+            idx += 1
         if gemini_task:
             gemini_valid = results[idx][0]
             user["gemini_key_valid"] = gemini_valid
@@ -342,6 +367,7 @@ async def handle_configure_form(user: dict, form) -> dict | None:
     migrated = False
     if not user.get("manifest_token") or user.get("allow_legacy_uid", True):
         import secrets
+
         user["manifest_token"] = user.get("manifest_token") or secrets.token_urlsafe(16)
         user["allow_legacy_uid"] = False
         migrated = True
@@ -350,6 +376,7 @@ async def handle_configure_form(user: dict, form) -> dict | None:
     invalidate_user_watchlist_cache(uid)
 
     from config import Config
+
     base = f"{Config.PROTOCOL}://{Config.REDIRECT_URL}"
     token_or_uid = user.get("manifest_token") or uid
     manifest_url = f"{base}/{token_or_uid}/manifest.json"
@@ -362,20 +389,27 @@ async def handle_configure_form(user: dict, form) -> dict | None:
 
     current_poster_provider = user.get("poster_provider", "none")
     top_key = user.get("top_poster_key", "")
+    ai_provider = user.get("ai_provider", "openrouter" if openrouter_key else "gemini" if gemini_key else "none")
     validation_failed_msg = []
     if current_poster_provider == "rpdb" and rpdb_key and not user.get("rpdb_key_valid", False):
         validation_failed_msg.append("Invalid RPDB API key")
     if current_poster_provider in ("top_poster", "topposters") and top_key and not user.get("top_key_valid", False):
         validation_failed_msg.append("Invalid TOP Posters API key")
-    if user.get("enable_recommendations") and gemini_key and not user.get("gemini_key_valid", False):
-        validation_failed_msg.append("Invalid Gemini API key")
+    if user.get("enable_recommendations"):
+        if ai_provider == "openrouter" and openrouter_key and not user.get("openrouter_key_valid", False):
+            validation_failed_msg.append("Invalid OpenRouter API key")
+        elif ai_provider == "gemini" and gemini_key and not user.get("gemini_key_valid", False):
+            validation_failed_msg.append("Invalid Gemini API key")
 
     is_json = False
     if has_request_context():
-        is_json = request.headers.get("Accept") == "application/json" or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        is_json = (
+            request.headers.get("Accept") == "application/json"
+            or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        )
 
     success_msg = (
-        "Your addon URL has changed for security. Click <strong class=\"text-white fw-bold\">Direct Install</strong> to re-add it in your app!"
+        'Your addon URL has changed for security. Click <strong class="text-white fw-bold">Direct Install</strong> to re-add it in your app!'
         if migrated
         else "Preferences saved successfully!"
     )
@@ -392,6 +426,7 @@ async def handle_configure_form(user: dict, form) -> dict | None:
                 "manifest_magnet": manifest_magnet,
                 "rpdb_valid": user.get("rpdb_key_valid", False),
                 "top_valid": user.get("top_key_valid", False),
+                "openrouter_valid": user.get("openrouter_key_valid", False),
                 "gemini_valid": user.get("gemini_key_valid", False),
             }
         if has_request_context():
@@ -407,6 +442,7 @@ async def handle_configure_form(user: dict, form) -> dict | None:
                 "manifest_magnet": manifest_magnet,
                 "rpdb_valid": user.get("rpdb_key_valid", False),
                 "top_valid": user.get("top_key_valid", False),
+                "openrouter_valid": user.get("openrouter_key_valid", False),
                 "gemini_valid": user.get("gemini_key_valid", False),
             }
         if has_request_context():
