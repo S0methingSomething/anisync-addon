@@ -29,7 +29,13 @@ def map_kitsu_to_stremio(
     titles = attributes.get("titles", {})
 
     if title_language == "english":
-        title = titles.get("en") or titles.get("en_us") or attributes.get("canonicalTitle") or titles.get("en_jp") or "Unknown Title"
+        title = (
+            titles.get("en")
+            or titles.get("en_us")
+            or attributes.get("canonicalTitle")
+            or titles.get("en_jp")
+            or "Unknown Title"
+        )
     elif title_language == "romaji":
         title = titles.get("en_jp") or attributes.get("canonicalTitle") or titles.get("en") or "Unknown Title"
     elif title_language == "japanese":
@@ -65,10 +71,7 @@ def map_kitsu_to_stremio(
         background = kitsu_cover or anizp_fanart or (cinemeta_data.get("background") if cinemeta_data else "") or poster
     else:  # fanart (default)
         background = (
-            (cinemeta_data.get("background") if cinemeta_data else None)
-            or anizp_fanart
-            or kitsu_cover
-            or poster
+            (cinemeta_data.get("background") if cinemeta_data else None) or anizp_fanart or kitsu_cover or poster
         )
 
     imdb_id = clean_imdb_id(anizp_data.get("mappings", {}).get("imdb_id") if anizp_data else None)
@@ -364,5 +367,7 @@ def map_kitsu_to_stremio(
     }
     if logo:
         meta_obj["logo"] = logo
+    if imdb_id:
+        meta_obj["imdb_id"] = imdb_id
 
     return meta_obj
