@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 import urllib.parse
 
@@ -30,6 +31,43 @@ def _prune_scrobbles(now: float):
             _in_flight_scrobbles.pop(k, None)
 
 
+def _extract_tracker_episode(parts: list[str]) -> tuple[int, tuple[int, int] | None]:
+    """Return (tracker_episode, display_coords) parsed from a content id's components.
+
+    AniSync emits `<prefix>:<id>:<entry_episode>`. Some clients (e.g. Nuvio) rebuild ids as
+    `<prefix>:<id>:<season>:<display_episode>` from the meta's display season/episode fields.
+    For rebuilt ids the trailing component is a display episode that may differ from the
+    entry-relative episode trackers need, so display_coords is returned for AniZip
+    reverse-mapping; the leading digits of the final component are the best-effort default.
+    Junk suffixes never fall back to the season component.
+    """
+    if len(parts) >= 3:
+        m_season = re.match(r"\d+", parts[1])
+        m_episode = re.match(r"\d+", parts[2])
+        episode = int(m_episode.group()) if m_episode else 1
+        display_coords = (int(m_season.group()), int(m_episode.group())) if m_season and m_episode else None
+        return episode, display_coords
+    if len(parts) >= 2:
+        m = re.match(r"\d+", parts[1])
+        return (int(m.group()) if m else 1), None
+    return 1, None
+
+
+def _reverse_map_display_coords(episodes: dict, display_coords: tuple[int, int]) -> int | None:
+    """Return the AniZip entry-relative episode whose (seasonNumber, episodeNumber) matches.
+
+    Used to translate client-rebuilt `<id>:<season>:<display_episode>` ids back to the
+    entry-relative episode MAL/AniList expect. Returns None when no episode matches,
+    letting callers keep the parsed best-effort episode (fail open).
+    """
+    for key, ep_info in episodes.items():
+        if not str(key).isdigit() or not isinstance(ep_info, dict):
+            continue
+        if ep_info.get("seasonNumber") == display_coords[0] and ep_info.get("episodeNumber") == display_coords[1]:
+            return int(key)
+    return None
+
+
 @subtitles_bp.route("/<user_id>/subtitles/<string:content_type>/<path:content_id>.json")
 @rate_limit(limit=60, period_seconds=60)
 async def handle_subtitles(user_id: str, content_type: str, content_id: str):
@@ -46,19 +84,18 @@ async def handle_subtitles(user_id: str, content_type: str, content_id: str):
     anilist_id = None
     simkl_id = None
     episode = 1
+    display_coords = None
 
     if clean_id.startswith("kitsu:"):
         remainder = clean_id[len("kitsu:") :]
         parts = remainder.split(":")
         kitsu_id = parts[0].strip()
-        if len(parts) > 1 and parts[1].isdigit():
-            episode = int(parts[1])
+        episode, display_coords = _extract_tracker_episode(parts)
     elif clean_id.startswith("mal:"):
         remainder = clean_id[len("mal:") :]
         parts = remainder.split(":")
         mal_id = parts[0].strip()
-        if len(parts) > 1 and parts[1].isdigit():
-            episode = int(parts[1])
+        episode, display_coords = _extract_tracker_episode(parts)
         from app.lib.id_resolver import resolve_mal_to_kitsu
 
         kitsu_id = await resolve_mal_to_kitsu(mal_id)
@@ -66,8 +103,7 @@ async def handle_subtitles(user_id: str, content_type: str, content_id: str):
         remainder = clean_id[len("anilist:") :]
         parts = remainder.split(":")
         anilist_id = parts[0].strip()
-        if len(parts) > 1 and parts[1].isdigit():
-            episode = int(parts[1])
+        episode, display_coords = _extract_tracker_episode(parts)
         from app.lib.id_resolver import resolve_anilist_to_kitsu
 
         kitsu_id = await resolve_anilist_to_kitsu(anilist_id)
@@ -75,8 +111,7 @@ async def handle_subtitles(user_id: str, content_type: str, content_id: str):
         remainder = clean_id[len("simkl:") :]
         parts = remainder.split(":")
         simkl_id = parts[0].strip()
-        if len(parts) > 1 and parts[1].isdigit():
-            episode = int(parts[1])
+        episode, display_coords = _extract_tracker_episode(parts)
         from app.lib.id_resolver import resolve_simkl_to_kitsu
 
         kitsu_id = await resolve_simkl_to_kitsu(simkl_id)
@@ -119,7 +154,32 @@ async def handle_subtitles(user_id: str, content_type: str, content_id: str):
         anilist_id = anilist_id or resolved_al
         logging.info("Resolved: kitsu=%s → mal=%s anilist=%s", kitsu_id, mal_id, anilist_id)
 
-    from app.services.db import get_cached_ids, cache_ids, db, update_user_watchlist_cache_progress
+    # Clients that rebuilt the id from display season/episode (e.g. Nuvio's
+    # `<id>:<season>:<episode>`) need the display coords reverse-mapped through AniZip
+    # to the entry-relative episode before syncing trackers.
+    anizp_shared = None
+    if display_coords and (anilist_id or mal_id):
+        try:
+            from app.routes.meta import fetch_anizp_metadata
+
+            anizp_shared = await fetch_anizp_metadata(anilist_id=anilist_id, mal_id=mal_id)
+            anizp_eps = anizp_shared.get("episodes") if isinstance(anizp_shared, dict) else None
+            if isinstance(anizp_eps, dict):
+                mapped = _reverse_map_display_coords(anizp_eps, display_coords)
+                if mapped:
+                    logging.info(
+                        "Reverse-mapped display coords %s via AniZip: episode %s -> %s for %s",
+                        display_coords,
+                        episode,
+                        mapped,
+                        clean_id,
+                    )
+                    episode = mapped
+        except Exception as e:
+            logging.debug("Could not reverse-map display coords from AniZip for %s: %s", clean_id, e)
+
+    from app.services.db import cache_ids, db, get_cached_ids, update_user_watchlist_cache_progress
+
     cached_ids = get_cached_ids(kitsu_id) if kitsu_id else None
     if cached_ids:
         simkl_id = cached_ids.get("simkl_id")
@@ -147,7 +207,10 @@ async def handle_subtitles(user_id: str, content_type: str, content_id: str):
         if anilist_id or mal_id:
             try:
                 from app.routes.meta import fetch_anizp_metadata
-                anizp_data = await fetch_anizp_metadata(anilist_id=anilist_id, mal_id=mal_id)
+
+                anizp_data = anizp_shared
+                if anizp_data is None:
+                    anizp_data = await fetch_anizp_metadata(anilist_id=anilist_id, mal_id=mal_id)
                 if anizp_data and isinstance(anizp_data, dict):
                     anizp_total_episodes = anizp_data.get("episodeCount")
                     if isinstance(anizp_data.get("episodes"), dict):
@@ -155,7 +218,10 @@ async def handle_subtitles(user_id: str, content_type: str, content_id: str):
                         anizp_ep = eps.get(str(episode))
                         if not anizp_ep:
                             for ep_info in eps.values():
-                                if ep_info.get("absoluteEpisodeNumber") == episode or ep_info.get("episodeNumber") == episode:
+                                if (
+                                    ep_info.get("absoluteEpisodeNumber") == episode
+                                    or ep_info.get("episodeNumber") == episode
+                                ):
                                     anizp_ep = ep_info
                                     break
                         if anizp_ep:

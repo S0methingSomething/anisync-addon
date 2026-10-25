@@ -1,6 +1,154 @@
 import asyncio
-from datetime import datetime, timezone
+import re
+from datetime import UTC, date, datetime
+
 from .fetchers import clean_imdb_id
+
+_YOUTUBE_ID_RE = re.compile(r"[A-Za-z0-9_-]{11}")
+_MAPPING_DATE_TOLERANCE_DAYS = 45
+
+
+def _parse_episode_int(value) -> int | None:
+    """Return the value as an int when it is a usable AniZip number, else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_youtube_trailer_id(attributes: dict) -> str | None:
+    """Return the Kitsu entry's YouTube trailer id when it is a well-formed video id."""
+    yt_id = attributes.get("youtubeVideoId")
+    if not isinstance(yt_id, str):
+        return None
+    yt_id = yt_id.strip()
+    if not _YOUTUBE_ID_RE.fullmatch(yt_id):
+        return None
+    return yt_id
+
+
+def _parse_air_date(value) -> date | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.strptime(value.strip()[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _determine_total_episodes(
+    attributes: dict, episodes_data: list, anizp_episodes: dict, canonical_total_episodes: int | None
+) -> int:
+    kitsu_ep_count = attributes.get("episodeCount") or 0
+
+    max_kitsu_ep = 0
+    if episodes_data:
+        ep_nums = []
+        for x in episodes_data:
+            raw_n = x.get("attributes", {}).get("number")
+            if raw_n is not None:
+                try:
+                    ep_nums.append(int(raw_n))
+                except (ValueError, TypeError):
+                    pass
+        if ep_nums:
+            max_kitsu_ep = max(ep_nums)
+
+    max_anizp_ep = 0
+    if anizp_episodes:
+        try:
+            max_anizp_ep = max([int(k) for k in anizp_episodes.keys() if k.isdigit()])
+        except ValueError:
+            pass
+
+    total_ep = max(kitsu_ep_count, max_kitsu_ep, max_anizp_ep)
+    # AniZip mappings sometimes cover a whole parent series; when its numeric keys fully
+    # cover the entry's own episode count and AniZip is the sole driver of the excess,
+    # cap at the entry count so phantom episodes are never emitted.
+    if (
+        kitsu_ep_count
+        and max_anizp_ep > max_kitsu_ep
+        and total_ep > kitsu_ep_count
+        and total_ep == max_anizp_ep
+        and all(str(n) in anizp_episodes for n in range(1, kitsu_ep_count + 1))
+    ):
+        total_ep = kitsu_ep_count
+    if total_ep == 0:
+        total_ep = canonical_total_episodes if (canonical_total_episodes and canonical_total_episodes > 0) else 12
+    elif canonical_total_episodes and canonical_total_episodes > 0:
+        total_ep = min(total_ep, canonical_total_episodes)
+    return total_ep
+
+
+def _resolve_season_mapping(
+    anizp_episodes: dict, cinemeta_data: dict | None, total_ep: int
+) -> dict[int, tuple[int, int]] | None:
+    """Map entry-relative episodes to root-show (season, episode) coordinates, or None.
+
+    AniZip `absoluteEpisodeNumber` indexes the flattened main-season episode list of
+    the root show (as described by Cinemeta/TMDB). AniZip's `seasonNumber`/`episodeNumber`
+    are TVDB-shaped and must NOT be used directly. The mapping is accepted only when it
+    is complete for every episode, indexes monotonically, produces unique coordinates,
+    and agrees on air dates with at least one verifiable date pair for multi-episode
+    entries; any failure rejects the whole entry (atomic, fail closed to legacy
+    season-1 display).
+    """
+    if total_ep <= 0 or not isinstance(anizp_episodes, dict) or not anizp_episodes:
+        return None
+    cinemeta_videos = (cinemeta_data or {}).get("videos")
+    if not isinstance(cinemeta_videos, list) or not cinemeta_videos:
+        return None
+
+    coord_set = set()
+    released_dates = {}
+    for video in cinemeta_videos:
+        try:
+            coords = (int(video.get("season")), int(video.get("episode")))
+        except (TypeError, ValueError):
+            continue
+        if coords[0] < 1 or coords[1] < 1:
+            continue
+        coord_set.add(coords)
+        parsed = _parse_air_date(video.get("released"))
+        if parsed and coords not in released_dates:
+            released_dates[coords] = parsed
+    if not coord_set:
+        return None
+    ordered = sorted(coord_set)
+
+    mapping = {}
+    prev_abs = 0
+    for ep_num in range(1, total_ep + 1):
+        anizp_ep = anizp_episodes.get(str(ep_num)) or {}
+        abs_num = _parse_episode_int(anizp_ep.get("absoluteEpisodeNumber"))
+        if abs_num is None or not 1 <= abs_num <= len(ordered):
+            return None
+        if abs_num <= prev_abs:
+            return None
+        prev_abs = abs_num
+        mapping[ep_num] = ordered[abs_num - 1]
+
+    if len(set(mapping.values())) != len(mapping):
+        return None
+
+    checked_dates = 0
+    for ep_num, coords in mapping.items():
+        anizp_date = _parse_air_date((anizp_episodes.get(str(ep_num)) or {}).get("airdate"))
+        cinemeta_date = released_dates.get(coords)
+        if anizp_date and cinemeta_date:
+            checked_dates += 1
+            if abs((anizp_date - cinemeta_date).days) > _MAPPING_DATE_TOLERANCE_DAYS:
+                return None
+    if not checked_dates and total_ep > 1:
+        return None
+
+    return mapping
 
 
 def map_kitsu_to_stremio(
@@ -43,6 +191,46 @@ def map_kitsu_to_stremio(
     else:  # default / canonical
         title = attributes.get("canonicalTitle") or titles.get("en") or titles.get("en_jp") or "Unknown Title"
     synopsis = attributes.get("synopsis", "")
+
+    # Media Type
+    subtype = (attributes.get("subtype") or "tv").lower()
+    media_type = "movie" if subtype == "movie" else "series"
+    anime_status = (attributes.get("status") or "").lower()
+
+    included = kitsu_data.get("included") or []
+    episodes_data = [item for item in included if item.get("type") == "episodes"]
+    anizp_episodes = anizp_data.get("episodes", {}) if anizp_data else {}
+
+    is_movie = subtype == "movie"
+    is_likely_sequel = False
+    real_season_map = None
+    total_ep = 0
+    if not is_movie:
+        canonical_title = (attributes.get("canonicalTitle") or "").lower()
+        is_likely_sequel = any(
+            marker in canonical_title
+            for marker in [
+                "season 2",
+                "season 3",
+                "season 4",
+                "season 5",
+                "2nd season",
+                "3rd season",
+                "4th season",
+                "part 2",
+                "part 3",
+                "part 4",
+                "cour 2",
+            ]
+        )
+        total_ep = _determine_total_episodes(attributes, episodes_data, anizp_episodes, canonical_total_episodes)
+        real_season_map = _resolve_season_mapping(anizp_episodes, cinemeta_data, total_ep)
+
+    # Cinemeta data describes the root franchise show. It may only enrich an entry whose
+    # episode coordinates are validated (real_season_map) or that is safely the root
+    # itself; an unvalidated sequel must not inherit root-show enrichment.
+    use_cinemeta = real_season_map is not None or not is_likely_sequel
+
     anizp_images = anizp_data.get("images", []) if anizp_data else []
     anizp_fanart = None
     anizp_poster = None
@@ -68,18 +256,26 @@ def map_kitsu_to_stremio(
     kitsu_cover = cover_data.get("original") or cover_data.get("large") or cover_data.get("medium")
 
     if backdrop_provider == "kitsu":
-        background = kitsu_cover or anizp_fanart or (cinemeta_data.get("background") if cinemeta_data else "") or poster
+        background = (
+            kitsu_cover
+            or anizp_fanart
+            or (cinemeta_data.get("background") if cinemeta_data and use_cinemeta else "")
+            or poster
+        )
     else:  # fanart (default)
         background = (
-            (cinemeta_data.get("background") if cinemeta_data else None) or anizp_fanart or kitsu_cover or poster
+            (cinemeta_data.get("background") if cinemeta_data and use_cinemeta else None)
+            or anizp_fanart
+            or kitsu_cover
+            or poster
         )
 
     imdb_id = clean_imdb_id(anizp_data.get("mappings", {}).get("imdb_id") if anizp_data else None)
 
     logo = anizp_logo
-    if not logo and cinemeta_data:
+    if not logo and cinemeta_data and use_cinemeta:
         logo = cinemeta_data.get("logo")
-    if not logo and imdb_id:
+    if not logo and imdb_id and use_cinemeta:
         logo = f"https://images.metahub.space/logo/medium/{imdb_id}/img"
 
     average_rating = attributes.get("averageRating")
@@ -96,22 +292,8 @@ def map_kitsu_to_stremio(
         else:
             release_info += "-"
 
-    # Media Type
-    subtype = (attributes.get("subtype") or "tv").lower()
-    media_type = "movie" if subtype == "movie" else "series"
-    anime_status = (attributes.get("status") or "").lower()
-
     # Videos / Episodes List
     videos = []
-    included = kitsu_data.get("included") or []
-
-    # Filter and sort episodes by number
-    episodes_data = []
-    for item in included:
-        if item.get("type") == "episodes":
-            episodes_data.append(item)
-
-    anizp_episodes = anizp_data.get("episodes", {}) if anizp_data else {}
 
     if subtype == "movie":
         videos.append(
@@ -126,35 +308,6 @@ def map_kitsu_to_stremio(
             }
         )
     else:
-        # Determine the maximum episode number we should display to prevent truncation
-        kitsu_ep_count = attributes.get("episodeCount") or 0
-
-        max_kitsu_ep = 0
-        if episodes_data:
-            ep_nums = []
-            for x in episodes_data:
-                raw_n = x.get("attributes", {}).get("number")
-                if raw_n is not None:
-                    try:
-                        ep_nums.append(int(raw_n))
-                    except (ValueError, TypeError):
-                        pass
-            if ep_nums:
-                max_kitsu_ep = max(ep_nums)
-
-        max_anizp_ep = 0
-        if anizp_episodes:
-            try:
-                max_anizp_ep = max([int(k) for k in anizp_episodes.keys() if k.isdigit()])
-            except ValueError:
-                pass
-
-        total_ep = max(kitsu_ep_count, max_kitsu_ep, max_anizp_ep)
-        if total_ep == 0:
-            total_ep = canonical_total_episodes if (canonical_total_episodes and canonical_total_episodes > 0) else 12
-        elif canonical_total_episodes and canonical_total_episodes > 0:
-            total_ep = min(total_ep, canonical_total_episodes)
-
         # Create a mapping of episode number to Kitsu episode data for O(1) lookup
         kitsu_ep_map = {}
         for ep in episodes_data:
@@ -185,29 +338,17 @@ def map_kitsu_to_stremio(
                     except (ValueError, TypeError):
                         pass
 
-        # Detect if this anime is likely a sequel to avoid assuming Season 1 when seasonNumber is missing
-        canonical_title = (attributes.get("canonicalTitle") or "").lower()
-        is_likely_sequel = any(
-            marker in canonical_title
-            for marker in [
-                "season 2",
-                "season 3",
-                "season 4",
-                "season 5",
-                "2nd season",
-                "3rd season",
-                "4th season",
-                "part 2",
-                "part 3",
-                "part 4",
-                "cour 2",
-            ]
-        )
-
         for i in range(1, total_ep + 1):
             ep_num = i
             kitsu_ep = kitsu_ep_map.get(i)
             anizp_ep = anizp_episodes.get(str(i)) or {}
+
+            if real_season_map is not None:
+                # Validated root-show coordinates; the tracker-facing video id stays entry-relative.
+                season, episode = real_season_map[ep_num]
+            else:
+                season = 1
+                episode = ep_num
 
             # Extract attributes from Kitsu episode if available
             attrs = kitsu_ep.get("attributes", {}) if kitsu_ep else {}
@@ -243,15 +384,10 @@ def map_kitsu_to_stremio(
             # Match Cinemeta episode thumbnail and release date safely
             cinemeta_thumb = None
             cin_released = None
-            if cinemeta_ep_thumbs or cinemeta_ep_released:
-                s_num = anizp_ep.get("seasonNumber")
-                if s_num is not None:
-                    try:
-                        s_int = int(s_num)
-                        cinemeta_thumb = cinemeta_ep_thumbs.get((s_int, ep_num))
-                        cin_released = cinemeta_ep_released.get((s_int, ep_num))
-                    except (ValueError, TypeError):
-                        pass
+            if use_cinemeta and (cinemeta_ep_thumbs or cinemeta_ep_released):
+                if real_season_map is not None:
+                    cinemeta_thumb = cinemeta_ep_thumbs.get((season, episode))
+                    cin_released = cinemeta_ep_released.get((season, episode))
                 elif not is_likely_sequel:
                     cinemeta_thumb = cinemeta_ep_thumbs.get((1, ep_num))
                     cin_released = cinemeta_ep_released.get((1, ep_num))
@@ -268,7 +404,7 @@ def map_kitsu_to_stremio(
                     try:
                         date_str = str(released).strip()[:10].replace("/", "-")
                         ep_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                        now_date = datetime.now(timezone.utc).date()
+                        now_date = datetime.now(UTC).date()
                         if ep_date > now_date:
                             cinemeta_thumb = None
                     except (ValueError, TypeError):
@@ -332,8 +468,8 @@ def map_kitsu_to_stremio(
                 {
                     "id": f"{video_base}:{ep_num}",
                     "title": ep_title,
-                    "episode": ep_num,
-                    "season": 1,
+                    "episode": episode,
+                    "season": season,
                     "released": released_str,
                     "overview": overview,
                     "thumbnail": thumbnail,
@@ -341,13 +477,13 @@ def map_kitsu_to_stremio(
             )
 
     genres = ["Anime"]
-    if cinemeta_data and cinemeta_data.get("genres"):
+    if use_cinemeta and cinemeta_data and cinemeta_data.get("genres"):
         for g in cinemeta_data["genres"]:
             if g not in genres:
                 genres.append(g)
 
     links = []
-    if cinemeta_data and "links" in cinemeta_data:
+    if use_cinemeta and cinemeta_data and "links" in cinemeta_data:
         for link in cinemeta_data["links"]:
             if link.get("category") == "Cast":
                 links.append(link)
@@ -367,7 +503,12 @@ def map_kitsu_to_stremio(
     }
     if logo:
         meta_obj["logo"] = logo
-    if imdb_id:
+    if imdb_id and use_cinemeta:
         meta_obj["imdb_id"] = imdb_id
+
+    trailer_yt_id = _extract_youtube_trailer_id(attributes)
+    if trailer_yt_id:
+        meta_obj["trailers"] = [{"source": trailer_yt_id, "type": "Trailer"}]
+        meta_obj["trailerStreams"] = [{"title": title, "ytId": trailer_yt_id}]
 
     return meta_obj
