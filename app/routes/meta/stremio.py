@@ -87,7 +87,7 @@ def _determine_total_episodes(
 
 
 def _resolve_season_mapping(
-    anizp_episodes: dict, cinemeta_data: dict | None, total_ep: int
+    anizp_episodes: dict, cinemeta_data: dict | None, total_ep: int, extrapolate_unaired: bool = False
 ) -> dict[int, tuple[int, int]] | None:
     """Map entry-relative episodes to root-show (season, episode) coordinates, or None.
 
@@ -97,7 +97,9 @@ def _resolve_season_mapping(
     is complete for every episode, indexes monotonically, produces unique coordinates,
     and agrees on air dates with at least one verifiable date pair for multi-episode
     entries; any failure rejects the whole entry (atomic, fail closed to legacy
-    season-1 display).
+    season-1 display). For airing entries, an episode that has not aired yet may lack
+    an absolute number; with extrapolate_unaired it is projected as the previous
+    absolute + 1, while a missing absolute on an already-aired episode still rejects.
     """
     if total_ep <= 0 or not isinstance(anizp_episodes, dict) or not anizp_episodes:
         return None
@@ -127,7 +129,12 @@ def _resolve_season_mapping(
     for ep_num in range(1, total_ep + 1):
         anizp_ep = anizp_episodes.get(str(ep_num)) or {}
         abs_num = _parse_episode_int(anizp_ep.get("absoluteEpisodeNumber"))
-        if abs_num is None or not 1 <= abs_num <= len(ordered):
+        if abs_num is None:
+            anizp_date = _parse_air_date(anizp_ep.get("airdate"))
+            if not extrapolate_unaired or (anizp_date is not None and anizp_date <= date.today()):
+                return None
+            abs_num = prev_abs + 1
+        if not 1 <= abs_num <= len(ordered):
             return None
         if abs_num <= prev_abs:
             return None
@@ -224,7 +231,12 @@ def map_kitsu_to_stremio(
             ]
         )
         total_ep = _determine_total_episodes(attributes, episodes_data, anizp_episodes, canonical_total_episodes)
-        real_season_map = _resolve_season_mapping(anizp_episodes, cinemeta_data, total_ep)
+        real_season_map = _resolve_season_mapping(
+            anizp_episodes,
+            cinemeta_data,
+            total_ep,
+            extrapolate_unaired=anime_status in ("current", "upcoming", "not_yet_released"),
+        )
 
     # Cinemeta data describes the root franchise show. It may only enrich an entry whose
     # episode coordinates are validated (real_season_map) or that is safely the root
