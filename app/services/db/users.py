@@ -17,7 +17,12 @@ def get_user(user_id: str, for_manifest: bool = False) -> dict | None:
     # 2. Try exact match on uid for legacy users
     user = users_collection.find_one({"uid": user_id})
     if user:
-        if for_manifest and user.get("manifest_token") and not user.get("allow_legacy_uid", False) and not user.get("is_guest"):
+        if (
+            for_manifest
+            and user.get("manifest_token")
+            and not user.get("allow_legacy_uid", False)
+            and not user.get("is_guest")
+        ):
             return None
         return user
 
@@ -60,6 +65,7 @@ def get_user(user_id: str, for_manifest: bool = False) -> dict | None:
             "enable_search": True,
             "hide_nsfw": True,
             "title_language": "english",
+            "franchise_mode": False,
             "metadata_provider": "kitsu",
             "meta_synopsis_provider": "kitsu",
             "meta_episodes_provider": "anizp",
