@@ -90,6 +90,8 @@ async def handle_configure_form(user: dict, form) -> dict | None:
         user["show_tracking_in_synopsis"] = form.get("show_tracking_in_synopsis") == "true"
     if "show_airing_in_synopsis" in form:
         user["show_airing_in_synopsis"] = form.get("show_airing_in_synopsis") == "true"
+    if "franchise_mode" in form:
+        user["franchise_mode"] = form.get("franchise_mode") == "true"
 
     if "custom_sort_enabled" in form:
         user["custom_sort_enabled"] = form.get("custom_sort_enabled") == "true"

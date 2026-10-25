@@ -1900,6 +1900,8 @@
                     value="{{ 'true' if user.get('show_tracking_in_synopsis', False) else 'false' }}">
                 <input type="hidden" id="show_airing_in_synopsis_val" name="show_airing_in_synopsis"
                     value="{{ 'true' if user.get('show_airing_in_synopsis', False) else 'false' }}">
+                <input type="hidden" id="franchise_mode_val" name="franchise_mode"
+                    value="{{ 'true' if user.get('franchise_mode', False) else 'false' }}">
                 <input type="hidden" id="combine_watchlists_val" name="combine_watchlists"
                     value="{{ 'true' if user.get('combine_watchlists', False) else 'false' }}">
                 <input type="hidden" id="custom_sort_enabled_val" name="custom_sort_enabled"
@@ -2461,6 +2463,21 @@
                         Adds next episode release countdowns to airing anime descriptions.
                         <span class="d-block text-secondary opacity-75 mt-0.5" style="font-size: 0.72rem;">
                             (e.g. <span style="color: #94a3b8; font-family: monospace; white-space: nowrap;">[Next Airing: Ep 10 in 23h]</span>)
+                        </span>
+                    </span>
+                </label>
+            </div>
+
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" role="switch" id="franchise_mode" {% if
+                    user.get('franchise_mode', False) %}checked{% endif %}>
+                <label class="form-check-label ms-1" for="franchise_mode">
+                    <span class="fw-medium d-block">Group franchise seasons in one meta</span>
+                    <span class="text-secondary small d-block">
+                        Adds earlier seasons of the same franchise to the episode list so season
+                        pickers work in Nuvio. Each season keeps its own tracker and playback ids.
+                        <span class="d-block text-warning opacity-75 mt-0.5" style="font-size: 0.72rem;">
+                            Slower meta requests; unvalidated seasons are excluded automatically.
                         </span>
                     </span>
                 </label>
@@ -6340,6 +6357,10 @@
         const showAiring = document.getElementById('show_airing_in_synopsis');
         const showAiringVal = document.getElementById('show_airing_in_synopsis_val');
         if (showAiring && showAiringVal) showAiringVal.value = showAiring.checked ? 'true' : 'false';
+
+        const franchiseMode = document.getElementById('franchise_mode');
+        const franchiseModeVal = document.getElementById('franchise_mode_val');
+        if (franchiseMode && franchiseModeVal) franchiseModeVal.value = franchiseMode.checked ? 'true' : 'false';
 
         const malEnabledCheckbox = document.getElementById('mal_enabled');
         const malEnabledVal = document.getElementById('mal_enabled_val');

@@ -154,7 +154,9 @@ async def handle_meta(user_id: str, meta_type: str, meta_id: str):
                     watched_progress = status_info.get("progress") or 0
                 canonical_total_episodes = status_info.get("total_episodes")
             elif show_watched or show_filler:
-                watched_progress = get_user_watch_progress(user_id, mal_id=mal_id, anilist_id=anilist_id, simkl_id=simkl_id)
+                watched_progress = get_user_watch_progress(
+                    user_id, mal_id=mal_id, anilist_id=anilist_id, simkl_id=simkl_id
+                )
 
         title_lang = user.get("title_language", "english") if user else "english"
         effective_provs = get_effective_meta_providers(user)
@@ -178,6 +180,25 @@ async def handle_meta(user_id: str, meta_type: str, meta_id: str):
             backdrop_provider=effective_provs.get("backdrop", "fanart"),
             poster_provider=effective_provs.get("poster", "anilist"),
         )
+
+        # Opt-in franchise mode: append validated sibling entries' videos so clients that
+        # render season rows (Nuvio) show the whole chain. Each sibling keeps its own
+        # entry-relative video ids and real season/episode coordinates.
+        franchise_personalized = False
+        if user.get("franchise_mode", False) and anilist_id and meta.get("type") == "series" and meta.get("videos"):
+            from .franchise import build_franchise_videos
+
+            meta["videos"], franchise_personalized = await build_franchise_videos(
+                user_id,
+                anilist_id,
+                kitsu_id,
+                title_lang,
+                effective_provs,
+                show_filler,
+                show_watched,
+                run_loop,
+                meta.get("videos") or [],
+            )
 
         # Apply user preferred Metadata Provider override (MAL / AniList with Kitsu fallback)
         mal_data_override, al_data_override = await apply_metadata_provider_override(meta, user, mal_id, anilist_id)
@@ -207,7 +228,9 @@ async def handle_meta(user_id: str, meta_type: str, meta_id: str):
         show_airing = user.get("show_airing_in_synopsis", False) if user else False
 
         if show_tracking:
-            user_status_hdr = await build_user_status_header(user, user_id, mal_id=mal_id, anilist_id=anilist_id, simkl_id=simkl_id)
+            user_status_hdr = await build_user_status_header(
+                user, user_id, mal_id=mal_id, anilist_id=anilist_id, simkl_id=simkl_id
+            )
             if user_status_hdr:
                 dynamic_headers.append(user_status_hdr)
 
@@ -247,7 +270,7 @@ async def handle_meta(user_id: str, meta_type: str, meta_id: str):
             curr_desc = meta.get("description", "")
             meta["description"] = f"{header_text}\n\n{curr_desc}" if curr_desc else header_text
 
-        has_personalized = bool(dynamic_headers or (show_watched and watched_progress > 0))
+        has_personalized = bool(dynamic_headers or (show_watched and watched_progress > 0) or franchise_personalized)
         cache_max_age = 60 if has_personalized else 86400
         cache_stale = 120 if has_personalized else 604800
         return await respond_with({"meta": meta}, max_age=cache_max_age, stale_while_revalidate=cache_stale)

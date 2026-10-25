@@ -1,5 +1,6 @@
 import asyncio
 import logging
+
 import httpx
 
 from app.services.http import get_client
@@ -67,15 +68,46 @@ mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus, $repeat: Int)
 }
 """
 
+RELATIONS_QUERY = """
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id
+    format
+    isAdult
+    startDate {
+      year
+      month
+      day
+    }
+    relations {
+      edges {
+        relationType
+        node {
+          id
+          format
+          isAdult
+          startDate {
+            year
+            month
+            day
+          }
+        }
+      }
+    }
+  }
+}
+"""
 
 
 class AnilistTokenInvalidError(Exception):
     """Exception raised when AniList API returns an invalid token error."""
+
     pass
 
 
 class AnilistAPIError(Exception):
     """Exception raised when AniList API returns GraphQL errors or null data."""
+
     pass
 
 
@@ -94,20 +126,20 @@ async def _gql(
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    
+
     payload: dict = {"query": query}
     if variables:
         payload["variables"] = variables
 
     client = get_client()
     req_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT
-    
+
     retries = 4
     backoffs = [0.2, 0.5, 1.0, 1.5]
     for attempt in range(retries):
         try:
             resp = await client.post(ANILIST_URL, json=payload, headers=headers, timeout=req_timeout)
-            
+
             # Handle rate limiting (HTTP 429 Too Many Requests)
             if resp.status_code == 429:
                 if attempt == retries - 1:
@@ -122,7 +154,7 @@ async def _gql(
                 )
                 await asyncio.sleep(wait_time)
                 continue
-                
+
             # AniList returns 401 for revoked/expired tokens, or 400/200 with error messages
             if resp.status_code == 401:
                 raise AnilistTokenInvalidError("AniList token is invalid or expired.")
@@ -138,11 +170,11 @@ async def _gql(
                     raise
                 except (ValueError, KeyError, TypeError):
                     pass
-                    
+
             resp.raise_for_status()
             return resp.json()
-            
-        except (httpx.HTTPStatusError, httpx.RequestError, asyncio.TimeoutError) as e:
+
+        except (TimeoutError, httpx.HTTPStatusError, httpx.RequestError) as e:
             if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429:
                 if attempt == retries - 1:
                     raise e
@@ -150,9 +182,11 @@ async def _gql(
             if attempt == retries - 1:
                 raise e
             sleep_time = backoffs[attempt] if attempt < len(backoffs) else 1.0
-            logging.warning("AniList query request error (attempt %s/%s): %s (retrying in %ss)", attempt + 1, retries, e, sleep_time)
+            logging.warning(
+                "AniList query request error (attempt %s/%s): %s (retrying in %ss)", attempt + 1, retries, e, sleep_time
+            )
             await asyncio.sleep(sleep_time)
-            
+
     raise httpx.RequestError("AniList query failed after retries")
 
 
@@ -201,6 +235,18 @@ async def save_entry(
     if not save_media:
         raise AnilistAPIError(f"AniList response missing SaveMediaListEntry: {data}")
     return save_media
+
+
+async def get_media_relations(token: str | None, anilist_id: int) -> dict:
+    """Return the raw AniList relations payload for one media entry.
+
+    The response contains the media itself (id, startDate) plus every relation edge
+    (relationType + node with id/format/isAdult/startDate). Callers decide which
+    relation types form a franchise; this function performs no filtering so tests
+    can exercise the walking logic against captured payloads.
+    """
+    data = await _gql(token, RELATIONS_QUERY, {"id": anilist_id}, timeout=DEFAULT_TIMEOUT)
+    return (data.get("data") or {}).get("Media") or {}
 
 
 USER_LIST_QUERY = """

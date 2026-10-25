@@ -158,6 +158,48 @@ def _resolve_season_mapping(
     return mapping
 
 
+_SEQUEL_TITLE_MARKERS = [
+    "season 2",
+    "season 3",
+    "season 4",
+    "season 5",
+    "2nd season",
+    "3rd season",
+    "4th season",
+    "part 2",
+    "part 3",
+    "part 4",
+    "cour 2",
+]
+
+
+def resolve_entry_season_mapping(
+    attributes: dict,
+    episodes_data: list,
+    anizp_data: dict,
+    cinemeta_data: dict | None,
+    canonical_total_episodes: int | None,
+) -> tuple[int, dict | None, bool]:
+    """Return (total_ep, real_season_map, is_likely_sequel) for one Kitsu entry.
+
+    Single source of truth for mapping validity: the meta mapper and franchise-mode
+    sibling gating both call this so an entry is accepted or excluded by the exact
+    same machinery.
+    """
+    anizp_episodes = anizp_data.get("episodes", {}) if anizp_data else {}
+    anime_status = (attributes.get("status") or "").lower()
+    canonical_title = (attributes.get("canonicalTitle") or "").lower()
+    is_likely_sequel = any(marker in canonical_title for marker in _SEQUEL_TITLE_MARKERS)
+    total_ep = _determine_total_episodes(attributes, episodes_data, anizp_episodes, canonical_total_episodes)
+    real_season_map = _resolve_season_mapping(
+        anizp_episodes,
+        cinemeta_data,
+        total_ep,
+        extrapolate_unaired=anime_status in ("current", "upcoming", "not_yet_released"),
+    )
+    return total_ep, real_season_map, is_likely_sequel
+
+
 def map_kitsu_to_stremio(
     kitsu_data: dict,
     meta_id: str,
@@ -213,29 +255,8 @@ def map_kitsu_to_stremio(
     real_season_map = None
     total_ep = 0
     if not is_movie:
-        canonical_title = (attributes.get("canonicalTitle") or "").lower()
-        is_likely_sequel = any(
-            marker in canonical_title
-            for marker in [
-                "season 2",
-                "season 3",
-                "season 4",
-                "season 5",
-                "2nd season",
-                "3rd season",
-                "4th season",
-                "part 2",
-                "part 3",
-                "part 4",
-                "cour 2",
-            ]
-        )
-        total_ep = _determine_total_episodes(attributes, episodes_data, anizp_episodes, canonical_total_episodes)
-        real_season_map = _resolve_season_mapping(
-            anizp_episodes,
-            cinemeta_data,
-            total_ep,
-            extrapolate_unaired=anime_status in ("current", "upcoming", "not_yet_released"),
+        total_ep, real_season_map, is_likely_sequel = resolve_entry_season_mapping(
+            attributes, episodes_data, anizp_data, cinemeta_data, canonical_total_episodes
         )
 
     # Cinemeta data describes the root franchise show. It may only enrich an entry whose

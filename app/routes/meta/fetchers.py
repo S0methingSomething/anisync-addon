@@ -1,7 +1,9 @@
 import asyncio
 import datetime
+import io
 import logging
 import re
+
 from app.services.http import get_client
 
 KITSU_API_BASE = "https://kitsu.io/api/edge"
@@ -18,6 +20,7 @@ def clean_imdb_id(val) -> str | None:
     val = str(val).strip()
     if val.startswith("[") and val.endswith("]"):
         import ast
+
         try:
             lst = ast.literal_eval(val)
             if isinstance(lst, list) and len(lst) > 0:
