@@ -103,14 +103,15 @@ def sibling_collides(taken_coords: set, sib_coords: list) -> bool:
     return any(coords in taken_coords for coords in sib_coords)
 
 
-def _cache_chain(col, cache_key: str, chain: list, now, ttl: datetime.timedelta) -> None:
+def _cache_doc(col, cache_key: str, fields: dict, now, ttl: datetime.timedelta) -> None:
+    """Upsert a cache doc keyed on anilist_id with a merged TTL stamp."""
     try:
         col.update_one(
             {"anilist_id": cache_key},
             {
                 "$set": {
                     "anilist_id": cache_key,
-                    "chain": [str(x) for x in chain],
+                    **fields,
                     "expires_at": now + ttl,
                     "updated_at": now,
                 }
@@ -178,21 +179,56 @@ async def fetch_franchise_chain(anilist_id: int) -> list[str]:
         logging.warning("Franchise chain walk failed for anilist=%s: %s", anilist_id, e)
         # Negative-cache the failure briefly so an upstream outage costs one stalled
         # request instead of one stalled request per uncached meta.
-        _cache_chain(col, cache_key, [], now, datetime.timedelta(minutes=_CHAIN_NEGATIVE_TTL_MINUTES))
+        _cache_doc(col, cache_key, {"chain": []}, now, datetime.timedelta(minutes=_CHAIN_NEGATIVE_TTL_MINUTES))
         return []
 
     # Empty walks (no siblings found) are also negative-cached briefly: they re-walk
     # otherwise, paying the full GraphQL cost on every request.
-    _cache_chain(
+    _cache_doc(
         col,
         cache_key,
-        chain,
+        {"chain": [str(x) for x in chain]},
         now,
         datetime.timedelta(days=FRANCHISE_CACHE_TTL_DAYS)
         if chain
         else datetime.timedelta(minutes=_CHAIN_NEGATIVE_TTL_MINUTES),
     )
     return [str(x) for x in chain]
+
+
+async def fetch_is_likely_sequel(anilist_id: int) -> bool | None:
+    """Return True when AniList shows a PREQUEL relation for this media, None on failure.
+
+    Authoritative sequel signal for enrichment gating: any prequel edge (even to a
+    movie or a different format) proves the entry continues earlier work. Cached in the
+    franchise_chain_cache collection under a `sig:` key for a week; failures are
+    negative-cached briefly so an AniList outage costs one lookup instead of one per
+    meta request.
+    """
+    from app.services.db import db
+
+    cache_key = f"sig:{anilist_id}"
+    col = db.get_collection("franchise_chain_cache")
+    now = datetime.datetime.utcnow()
+    try:
+        cached = col.find_one({"anilist_id": cache_key})
+        if cached and cached.get("expires_at") > now:
+            is_sequel = cached.get("is_sequel")
+            return is_sequel if isinstance(is_sequel, bool) else None
+    except Exception as e:
+        logging.error("Failed to read franchise_chain_cache for %s: %s", cache_key, e)
+
+    try:
+        media = await get_media_relations(None, anilist_id)
+        edges = (media or {}).get("relations", {}).get("edges") or []
+        has_prequel = any((edge.get("relationType") or "").upper() == "PREQUEL" for edge in edges)
+    except Exception as e:
+        logging.warning("Sequel signal fetch failed for anilist=%s: %s", anilist_id, e)
+        _cache_doc(col, cache_key, {"is_sequel": None}, now, datetime.timedelta(minutes=_CHAIN_NEGATIVE_TTL_MINUTES))
+        return None
+
+    _cache_doc(col, cache_key, {"is_sequel": has_prequel}, now, datetime.timedelta(days=FRANCHISE_CACHE_TTL_DAYS))
+    return has_prequel
 
 
 async def build_franchise_videos(
@@ -312,7 +348,7 @@ async def _build_franchise_videos(
             has_personalized = True
 
         sib_episodes_data = [item for item in (sib_kitsu_data.get("included") or []) if item.get("type") == "episodes"]
-        _, sib_map, _ = resolve_entry_season_mapping(
+        _, sib_map = resolve_entry_season_mapping(
             sib_attrs, sib_episodes_data, sib_anizp, cinemeta_data, canonical_total
         )
         if not sib_map:

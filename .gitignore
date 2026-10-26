@@ -15,6 +15,10 @@ trigger_test_*.py
 *.bak
 tests/
 conftest.py
+node_modules/
+scripts/package.json
+scripts/package-lock.json
+scripts/addon_client_test.mjs
 .impeccable/
 DESIGN.md
 PRODUCT.md

@@ -161,6 +161,20 @@ async def handle_meta(user_id: str, meta_type: str, meta_id: str):
         title_lang = user.get("title_language", "english") if user else "english"
         effective_provs = get_effective_meta_providers(user)
 
+        # Authoritative sequel signal: an AniList PREQUEL relation proves continuation.
+        # Cached a week in Mongo; failures cost one bounded lookup. Movies skip gating
+        # entirely, so the signal is only worth fetching for series.
+        anilist_has_prequel = None
+        sig_attrs = ((kitsu_data or {}).get("data") or {}).get("attributes") or {}
+        if anilist_id and sig_attrs and (sig_attrs.get("subtype") or "tv").lower() != "movie":
+            try:
+                from .franchise import fetch_is_likely_sequel
+
+                async with asyncio.timeout(6):
+                    anilist_has_prequel = await fetch_is_likely_sequel(int(anilist_id))
+            except Exception:
+                anilist_has_prequel = None
+
         # Offload CPU-bound mapping to worker threads
         run_loop = asyncio.get_running_loop()
         meta = await asyncio.to_thread(
@@ -179,6 +193,7 @@ async def handle_meta(user_id: str, meta_type: str, meta_id: str):
             episodes_provider=effective_provs.get("episodes", "anizp"),
             backdrop_provider=effective_provs.get("backdrop", "fanart"),
             poster_provider=effective_provs.get("poster", "anilist"),
+            anilist_has_prequel=anilist_has_prequel,
         )
 
         # Opt-in franchise mode: append validated sibling entries' videos so clients that
